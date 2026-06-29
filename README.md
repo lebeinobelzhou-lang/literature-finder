@@ -78,6 +78,16 @@ export OPENALEX_MAILTO="your_email@example.com"
 export UNPAYWALL_EMAIL="your_email@example.com"
 ```
 
+### Optional OpenAlex API Key
+
+OpenAlex may allow local searches without an API key, subject to its current public API limits. If you have an OpenAlex API key, set it locally with:
+
+```bash
+export OPENALEX_API_KEY="your_openalex_api_key"
+```
+
+For Streamlit Cloud deployments, add `OPENALEX_API_KEY` in the app secrets if unauthenticated searches fail or hit API limits. Do not commit API keys or Streamlit secrets to GitHub.
+
 ## Run The Streamlit App
 
 From the project directory:

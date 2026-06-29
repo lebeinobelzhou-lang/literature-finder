@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock, patch
 
 import app
 
@@ -143,6 +144,41 @@ class AppHelperTests(unittest.TestCase):
         self.assertIn("https://open.example/full-text", markdown)
         self.assertIn("https://oa.example/full-text", markdown)
         self.assertIn("Open access found", markdown)
+
+    def test_get_openalex_api_key_prefers_streamlit_secrets(self):
+        with patch.dict("os.environ", {"OPENALEX_API_KEY": "env-key"}):
+            self.assertEqual(app.get_openalex_api_key({"OPENALEX_API_KEY": "secret-key"}), "secret-key")
+
+    def test_get_openalex_api_key_falls_back_to_environment(self):
+        with patch.dict("os.environ", {"OPENALEX_API_KEY": "env-key"}):
+            self.assertEqual(app.get_openalex_api_key({}), "env-key")
+
+    def test_search_openalex_adds_api_key_query_param_when_available(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"results": []}
+
+        with patch.object(app, "get_openalex_api_key", return_value="test-key"), patch.object(
+            app.requests, "get", return_value=response
+        ) as get:
+            app.search_openalex("autism", 10, None, None, "relevance")
+
+        params = get.call_args.kwargs["params"]
+        self.assertEqual(params["api_key"], "test-key")
+
+    def test_search_openalex_raises_detailed_error_for_non_200_response(self):
+        response = Mock()
+        response.status_code = 403
+        response.text = "daily usage limit exceeded for this key"
+
+        with patch.object(app.requests, "get", return_value=response):
+            with self.assertRaises(app.OpenAlexRequestError) as context:
+                app.search_openalex("autism", 10, None, None, "relevance")
+
+        message = str(context.exception)
+        self.assertIn("status 403", message)
+        self.assertIn("autism", message)
+        self.assertIn("daily usage limit exceeded", message)
 
 
 if __name__ == "__main__":

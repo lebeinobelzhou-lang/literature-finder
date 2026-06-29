@@ -2,7 +2,7 @@ import csv
 import io
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import requests
 
@@ -10,6 +10,38 @@ import requests
 OPENALEX_URL = "https://api.openalex.org/works"
 UNPAYWALL_URL_TEMPLATE = "https://api.unpaywall.org/v2/{doi}"
 DEFAULT_PAUSE_SECONDS = 0.2
+OPENALEX_ERROR_SNIPPET_LENGTH = 500
+
+
+class OpenAlexRequestError(requests.RequestException):
+    def __init__(self, keyword: str, status_code: int, response_text: str):
+        self.keyword = keyword
+        self.status_code = status_code
+        self.response_text = (response_text or "")[:OPENALEX_ERROR_SNIPPET_LENGTH]
+        super().__init__(
+            f"OpenAlex request failed with status {status_code} while searching "
+            f"'{keyword}'. Response: {self.response_text or '[empty response]'}"
+        )
+
+
+def get_openalex_api_key(secrets: Optional[Mapping[str, Any]] = None) -> str:
+    if secrets is None:
+        try:
+            import streamlit as st
+
+            secrets = st.secrets
+        except Exception:
+            secrets = None
+
+    if secrets is not None:
+        try:
+            api_key = secrets.get("OPENALEX_API_KEY")
+        except Exception:
+            api_key = None
+        if api_key:
+            return str(api_key).strip()
+
+    return (os.getenv("OPENALEX_API_KEY") or "").strip()
 
 
 def normalize_doi(doi: str) -> str:
@@ -133,8 +165,13 @@ def search_openalex(
     if mailto:
         params["mailto"] = mailto
 
+    api_key = get_openalex_api_key()
+    if api_key:
+        params["api_key"] = api_key
+
     response = requests.get(OPENALEX_URL, params=params, timeout=30)
-    response.raise_for_status()
+    if response.status_code != 200:
+        raise OpenAlexRequestError(keyword, response.status_code, response.text)
     data = response.json()
 
     rows = []
@@ -274,9 +311,12 @@ def search_literature(
         status_area.info(f"Searching OpenAlex for: {keyword}")
         try:
             keyword_rows = search_openalex(keyword, max_results, minimum_year, maximum_year, sort_by)
+        except OpenAlexRequestError as error:
+            status_area.error(str(error))
+            raise
         except requests.RequestException as error:
             status_area.warning(f"OpenAlex search failed for '{keyword}': {error}")
-            keyword_rows = []
+            raise
 
         all_rows.extend(keyword_rows)
         time.sleep(DEFAULT_PAUSE_SECONDS)
@@ -342,15 +382,22 @@ def render_app() -> None:
             return
 
         with st.spinner("Searching literature APIs..."):
-            rows = search_literature(
-                keywords=keywords,
-                max_results=int(max_results),
-                minimum_year=minimum_year,
-                maximum_year=maximum_year,
-                require_abstract=require_abstract,
-                sort_by=sort_by,
-                status_area=status_area,
-            )
+            try:
+                rows = search_literature(
+                    keywords=keywords,
+                    max_results=int(max_results),
+                    minimum_year=minimum_year,
+                    maximum_year=maximum_year,
+                    require_abstract=require_abstract,
+                    sort_by=sort_by,
+                    status_area=status_area,
+                )
+            except OpenAlexRequestError as error:
+                st.error(str(error))
+                return
+            except requests.RequestException as error:
+                st.error(f"OpenAlex search failed: {error}")
+                return
 
         status_area.success(f"Found {len(rows)} unique papers.")
         if not rows:
